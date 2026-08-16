@@ -31,7 +31,6 @@ public static class Poc
             }
         }
 
-        // Redirect save path like the real injector does, so it doesn't blow up on ~/My Games
         var progType = game.GetType("Terraria.Program");
         var saveField = progType?.GetField("SavePath");
         if (saveField != null)
@@ -41,41 +40,37 @@ public static class Poc
             Console.WriteLine("[Poc] SavePath set to: " + savePath);
         }
 
-        // Background thread: reflectively poke Main.time every 3s, no Harmony, no hooking.
-        var poker = new Thread(() =>
+        var events = new GameEvents(game);
+        events.OnEventTriggered += (name) =>
         {
-            Type mainType = null;
-            FieldInfo timeField = null;
-            double t = 4500.0; // ~morning
+            Console.WriteLine("[EVENT] *** " + name + " triggered! ***");
+        };
+
+        var poller = new Thread(() =>
+        {
+            // give the game a moment to fully init before we start hammering reflection
+            Thread.Sleep(5000);
+
+            Type npcType = game.GetType("Terraria.NPC");
+            FieldInfo testFlag = npcType.GetField("downedBoss1", BindingFlags.Public | BindingFlags.Static);
+
+            int tick = 0;
             while (true)
             {
-                try
+                events.Poll();
+
+                // after 15s, flip a flag ourselves to prove OnEventTriggered fires end-to-end
+                if (tick == 5 && testFlag != null)
                 {
-                    if (mainType == null)
-                    {
-                        mainType = game.GetType("Terraria.Main");
-                        if (mainType != null)
-                            timeField = mainType.GetField("time", BindingFlags.Public | BindingFlags.Static);
-                    }
-                    if (timeField != null)
-                    {
-                        timeField.SetValue(null, t);
-                        Console.WriteLine("[Poc] Forced Main.time = " + t);
-                    }
-                    else
-                    {
-                        Console.WriteLine("[Poc] Main.time field not found yet...");
-                    }
+                    Console.WriteLine("[Poc] Forcing NPC.downedBoss1 = true to test event pipeline...");
+                    testFlag.SetValue(null, true);
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("[Poc] poke error: " + ex.Message);
-                }
-                Thread.Sleep(3000);
+                tick++;
+                Thread.Sleep(1000);
             }
         });
-        poker.IsBackground = true;
-        poker.Start();
+        poller.IsBackground = true;
+        poller.Start();
 
         Console.WriteLine("[Poc] Invoking game entry point...");
         game.EntryPoint.Invoke(null, new object[] { new string[0] });
