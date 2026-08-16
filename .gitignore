@@ -1,0 +1,4 @@
+*.exe
+*.dll
+!deps/*.dll
+pb_splits.txt
