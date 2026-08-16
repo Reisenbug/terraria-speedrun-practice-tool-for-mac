@@ -40,41 +40,21 @@ public static class Poc
             Console.WriteLine("[Poc] SavePath set to: " + savePath);
         }
 
-        var godMode = new GodMode(game);
-
         var poller = new Thread(() =>
         {
             Thread.Sleep(5000);
-            Console.WriteLine("[Poc] Enabling God Mode reflection loop (press ctrl+C to stop)...");
-            godMode.Enabled = true;
+            var flags = new BossFlags(game);
 
-            Type mainType = game.GetType("Terraria.Main");
-            PropertyInfo localPlayerProp = mainType.GetProperty("LocalPlayer", BindingFlags.Public | BindingFlags.Static);
-            Type playerType = game.GetType("Terraria.Player");
-            FieldInfo statLifeField = playerType.GetField("statLife", BindingFlags.Public | BindingFlags.Instance);
+            Console.WriteLine("[Poc] Initial state:");
+            foreach (var name in flags.Names)
+                Console.WriteLine("  " + name + " = " + flags.Get(name));
 
-            int tick = 0;
-            while (true)
-            {
-                godMode.Poll();
+            Console.WriteLine("[Poc] Calling SetAllBeforeMechBosses()...");
+            flags.SetAllBeforeMechBosses();
 
-                if (tick % 5 == 0)
-                {
-                    try
-                    {
-                        object lp = localPlayerProp.GetValue(null, null);
-                        int life = lp != null ? (int)statLifeField.GetValue(lp) : -1;
-                        Console.WriteLine("[Poc] tick=" + tick + " LocalPlayer.statLife=" + life);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("[Poc] read error: " + ex.Message);
-                    }
-                }
-
-                tick++;
-                Thread.Sleep(200);
-            }
+            Console.WriteLine("[Poc] State after set:");
+            foreach (var name in flags.Names)
+                Console.WriteLine("  " + name + " = " + flags.Get(name));
         });
         poller.IsBackground = true;
         poller.Start();
