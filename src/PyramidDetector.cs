@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 
 // Scans the in-memory Main.tile[,] array for Sandstone Brick tiles (TileID 151)
@@ -53,4 +54,31 @@ public class PyramidDetector
         }
         return count;
     }
+
+    public Dictionary<ushort, long> TypeHistogram(int sampleEveryN = 1)
+    {
+        var hist = new Dictionary<ushort, long>();
+        int activeCount = 0;
+        int inactiveCount = 0;
+        for (int x = 0; x < _sizeX; x += sampleEveryN)
+        {
+            for (int y = 0; y < _sizeY; y += sampleEveryN)
+            {
+                object t = _tileArray.GetValue(x, y);
+                if (t == null) continue;
+                bool active = (bool)_activeMethod.Invoke(t, null);
+                if (!active) { inactiveCount++; continue; }
+                activeCount++;
+                ushort type = (ushort)_typeField.GetValue(t);
+                if (!hist.ContainsKey(type)) hist[type] = 0;
+                hist[type]++;
+            }
+        }
+        hist[ushort.MaxValue] = activeCount; // sentinel: total active
+        hist[ushort.MaxValue - 1] = inactiveCount; // sentinel: total inactive
+        return hist;
+    }
+
+    public int SizeX => _sizeX;
+    public int SizeY => _sizeY;
 }

@@ -14,7 +14,6 @@ public static class Poc
         AppDomain.CurrentDomain.AssemblyResolve += ResolveHandler;
 
         string gameExe = args.Length > 0 ? args[0] : "Terraria.exe";
-        Console.WriteLine("[Poc] Loading game assembly: " + gameExe);
         Assembly game = Assembly.UnsafeLoadFrom(gameExe);
 
         foreach (var resName in game.GetManifestResourceNames())
@@ -33,10 +32,7 @@ public static class Poc
         var progType = game.GetType("Terraria.Program");
         var saveField = progType?.GetField("SavePath");
         string savePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "My Games", "Terraria");
-        if (saveField != null)
-        {
-            saveField.SetValue(null, savePath);
-        }
+        if (saveField != null) saveField.SetValue(null, savePath);
 
         var worker = new Thread(() =>
         {
@@ -44,22 +40,7 @@ public static class Poc
             {
                 WaitForRenderSystemReady(game);
                 SetupActivePlayer(game);
-                for (int i = 1; i <= 3; i++)
-                {
-                    Console.WriteLine("[Poc] ===== Generation round " + i + " =====");
-                    try
-                    {
-                        RunHeadlessWorldGen(game, savePath);
-                    }
-                    catch (Exception roundEx)
-                    {
-                        Console.WriteLine("[Poc] Round " + i + " FAILED: " + roundEx);
-                        if (roundEx is ThreadAbortException)
-                        {
-                            Thread.ResetAbort();
-                        }
-                    }
-                }
+                LoadKnownWorldAndDetect(game);
             }
             catch (Exception ex)
             {
@@ -71,7 +52,6 @@ public static class Poc
         worker.IsBackground = true;
         worker.Start();
 
-        Console.WriteLine("[Poc] Invoking game entry point...");
         game.EntryPoint.Invoke(null, new object[] { new string[0] });
     }
 
@@ -90,8 +70,6 @@ public static class Poc
 
         FieldInfo activePlayerField = mainType.GetField("ActivePlayerFileData", BindingFlags.Public | BindingFlags.Static);
         activePlayerField.SetValue(null, playerFileData);
-
-        Console.WriteLine("[Poc] ActivePlayerFileData set up: " + (playerFileData != null));
     }
 
     static void WaitForRenderSystemReady(Assembly game)
@@ -104,86 +82,45 @@ public static class Poc
         while (true)
         {
             object instance = instanceField.GetValue(null);
-            if (instance != null)
+            if (instance != null && tilesRendererField.GetValue(instance) != null)
             {
-                object renderer = tilesRendererField.GetValue(instance);
-                if (renderer != null)
-                {
-                    Console.WriteLine("[Poc] TilesRenderer ready after " + sw.Elapsed.TotalSeconds + "s");
-                    return;
-                }
-            }
-            Thread.Sleep(500);
-            if (sw.Elapsed.TotalSeconds > 60)
-            {
-                Console.WriteLine("[Poc] Gave up waiting for TilesRenderer after 60s");
+                Console.WriteLine("[Poc] Game ready after " + sw.Elapsed.TotalSeconds + "s");
                 return;
             }
+            Thread.Sleep(500);
+            if (sw.Elapsed.TotalSeconds > 60) return;
         }
     }
 
-    static void RunHeadlessWorldGen(Assembly game, string savePath)
+    static void LoadKnownWorldAndDetect(Assembly game)
     {
+        string worldPath = "/Users/lhy/Library/Application Support/Terraria/Worlds/s_rand_20260816_181649_1.wld";
+        Console.WriteLine("[Poc] Loading known world: " + worldPath);
+        Console.WriteLine("[Poc] File exists: " + File.Exists(worldPath));
+
         Type mainType = game.GetType("Terraria.Main");
-        Type worldGenType = game.GetType("Terraria.WorldGen");
         Type worldFileType = game.GetType("Terraria.IO.WorldFile");
         Type worldFileDataType = game.GetType("Terraria.IO.WorldFileData");
-        Type worldGeneratorType = game.GetType("Terraria.WorldBuilding.WorldGenerator");
-        Type controllerType = worldGeneratorType.GetNestedType("Controller", BindingFlags.Public | BindingFlags.NonPublic);
 
-        MethodInfo setWorldSize = worldGenType.GetMethod("SetWorldSize", BindingFlags.Public | BindingFlags.Static);
-        PropertyInfo gameModeProp = mainType.GetProperty("GameMode", BindingFlags.Public | BindingFlags.Static);
-        FieldInfo worldNameField = mainType.GetField("worldName", BindingFlags.Public | BindingFlags.Static);
         FieldInfo activeWorldFileDataField = mainType.GetField("ActiveWorldFileData", BindingFlags.Public | BindingFlags.Static);
-        MethodInfo createMetadata = worldFileType.GetMethod("CreateMetadata", BindingFlags.Public | BindingFlags.Static);
-        MethodInfo setSeed = worldFileDataType.GetMethod("SetSeed", new[] { typeof(string) });
-        MethodInfo createNewWorld = worldGenType.GetMethod("CreateNewWorld", BindingFlags.Public | BindingFlags.Static);
+        MethodInfo loadWorld = worldFileType.GetMethod("LoadWorld", Type.EmptyTypes);
 
-        string worldName = "PocGenTest_" + DateTime.Now.Ticks;
+        ConstructorInfo ctor = worldFileDataType.GetConstructor(new[] { typeof(string), typeof(bool) });
+        object worldFileData = ctor.Invoke(new object[] { worldPath, false });
+        activeWorldFileDataField.SetValue(null, worldFileData);
 
-        setWorldSize.Invoke(null, new object[] { 0 }); // 0 = Small
-        gameModeProp.SetValue(null, 0, null); // Normal
-        worldNameField.SetValue(null, worldName);
+        Console.WriteLine("[Poc] Calling WorldFile.LoadWorld()...");
+        loadWorld.Invoke(null, null);
+        Console.WriteLine("[Poc] LoadWorld() returned.");
 
-        int gameMode = (int)gameModeProp.GetValue(null, null);
-        object metadata = createMetadata.Invoke(null, new object[] { worldName, false, gameMode });
-        activeWorldFileDataField.SetValue(null, metadata);
-        setSeed.Invoke(metadata, new object[] { "" }); // random seed
+        FieldInfo maxTilesXField = mainType.GetField("maxTilesX", BindingFlags.Public | BindingFlags.Static);
+        FieldInfo maxTilesYField = mainType.GetField("maxTilesY", BindingFlags.Public | BindingFlags.Static);
+        Console.WriteLine("[Poc] After load: maxTilesX=" + maxTilesXField.GetValue(null) + " maxTilesY=" + maxTilesYField.GetValue(null));
 
-        object controller = Activator.CreateInstance(controllerType, new object[] { null });
-        FieldInfo pausedField = controllerType.GetField("Paused", BindingFlags.Public | BindingFlags.Instance);
-        if (pausedField != null) pausedField.SetValue(controller, false);
-
-        Console.WriteLine("[Poc] Starting world generation: " + worldName);
-        var sw = Stopwatch.StartNew();
-
-        object taskObj = createNewWorld.Invoke(null, new object[] { null, controller, null });
-        var task = (System.Threading.Tasks.Task)taskObj;
-
-        int pollCount = 0;
-        while (!task.IsCompleted)
-        {
-            Thread.Sleep(1000);
-            pollCount++;
-            if (pollCount > 120)
-            {
-                Console.WriteLine("[Poc] Giving up after 120s poll.");
-                break;
-            }
-        }
-        if (task.IsFaulted)
-        {
-            Console.WriteLine("[Poc] Task faulted: " + task.Exception);
-        }
-
-        sw.Stop();
-        Console.WriteLine("[Poc] World generation finished in " + sw.Elapsed.TotalSeconds + "s");
-
-        var detectSw = Stopwatch.StartNew();
         var detector = new PyramidDetector(game);
-        int sandstoneCount = detector.CountSandstoneBricks();
-        detectSw.Stop();
-        Console.WriteLine("[Poc] In-memory pyramid scan: " + sandstoneCount + " sandstone bricks, took " + detectSw.Elapsed.TotalSeconds + "s. Pyramid found: " + (sandstoneCount >= 1));
+        Console.WriteLine("[Poc] tile array dims: " + detector.SizeX + " x " + detector.SizeY);
+        int count = detector.CountSandstoneBricks();
+        Console.WriteLine("[Poc] Sandstone Brick count in KNOWN-PYRAMID world: " + count);
     }
 
     static Assembly ResolveHandler(object sender, ResolveEventArgs args)
