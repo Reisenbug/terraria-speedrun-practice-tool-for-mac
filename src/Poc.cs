@@ -40,57 +40,40 @@ public static class Poc
             Console.WriteLine("[Poc] SavePath set to: " + savePath);
         }
 
-        string pbPath = Path.Combine(AssemblyFolder, "pb_splits_test.txt");
-        var timer = new SplitTimer(new[] { "Eye of Cthulhu", "Skeletron", "Hardmode" }, pbPath);
-        var events = new GameEvents(game);
-        var binding = new AutoSplitBinding(timer, events);
-        binding.Arm();
+        var godMode = new GodMode(game);
 
         var poller = new Thread(() =>
         {
             Thread.Sleep(5000);
+            Console.WriteLine("[Poc] Enabling God Mode reflection loop (press ctrl+C to stop)...");
+            godMode.Enabled = true;
 
-            Type npcType = game.GetType("Terraria.NPC");
-            FieldInfo boss1 = npcType.GetField("downedBoss1", BindingFlags.Public | BindingFlags.Static);
-            FieldInfo boss3 = npcType.GetField("downedBoss3", BindingFlags.Public | BindingFlags.Static);
             Type mainType = game.GetType("Terraria.Main");
-            FieldInfo hardMode = mainType.GetField("hardMode", BindingFlags.Public | BindingFlags.Static);
-
-            Console.WriteLine("[Poc] Starting timer...");
-            timer.Start();
+            PropertyInfo localPlayerProp = mainType.GetProperty("LocalPlayer", BindingFlags.Public | BindingFlags.Static);
+            Type playerType = game.GetType("Terraria.Player");
+            FieldInfo statLifeField = playerType.GetField("statLife", BindingFlags.Public | BindingFlags.Instance);
 
             int tick = 0;
             while (true)
             {
-                events.Poll();
+                godMode.Poll();
 
-                if (tick == 3 && boss1 != null)
+                if (tick % 5 == 0)
                 {
-                    Console.WriteLine("[Poc] Simulating Eye of Cthulhu kill...");
-                    boss1.SetValue(null, true);
-                }
-                if (tick == 6 && boss3 != null)
-                {
-                    Console.WriteLine("[Poc] Simulating Skeletron kill...");
-                    boss3.SetValue(null, true);
-                }
-                if (tick == 9 && hardMode != null)
-                {
-                    Console.WriteLine("[Poc] Simulating Hardmode trigger...");
-                    hardMode.SetValue(null, true);
-                }
-                if (tick == 12)
-                {
-                    Console.WriteLine("[Poc] Timer running=" + timer.Running + " elapsed=" + SplitTimer.FormatSpan(timer.Elapsed));
-                    for (int i = 0; i < timer.Splits.Count; i++)
+                    try
                     {
-                        var s = timer.Splits[i];
-                        Console.WriteLine("  split[" + i + "] " + s.Name + " = " + (s.CurrentTime.HasValue ? SplitTimer.FormatSpan(s.CurrentTime.Value) : "not hit"));
+                        object lp = localPlayerProp.GetValue(null, null);
+                        int life = lp != null ? (int)statLifeField.GetValue(lp) : -1;
+                        Console.WriteLine("[Poc] tick=" + tick + " LocalPlayer.statLife=" + life);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Poc] read error: " + ex.Message);
                     }
                 }
 
                 tick++;
-                Thread.Sleep(1000);
+                Thread.Sleep(200);
             }
         });
         poller.IsBackground = true;
