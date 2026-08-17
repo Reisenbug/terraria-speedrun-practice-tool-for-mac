@@ -67,26 +67,33 @@ public static class PyramidBatchGen
         WaitForRenderSystemReady(game);
         object playerFileData = SetupActivePlayer(game);
 
+        Type mainType = game.GetType("Terraria.Main");
+        FieldInfo worldPathField = mainType.GetField("WorldPath", BindingFlags.Public | BindingFlags.Static);
+        string worldDir = (string)worldPathField.GetValue(null);
+
         var detector = new PyramidDetector(game);
         int found = 0;
         int attempted = 0;
+        int nextN = GetNextPocNumber(worldDir);
         var totalSw = Stopwatch.StartNew();
 
         Console.WriteLine("[BatchGen] Target: " + target + " pyramid world(s), max attempts: " + maxAttempts);
+        Console.WriteLine("[BatchGen] Starting at n=" + nextN + " (n_Poc naming)");
         Console.WriteLine();
 
         while (found < target && attempted < maxAttempts)
         {
             attempted++;
             var roundSw = Stopwatch.StartNew();
+            string worldName = nextN + "_Poc";
             object worldFileData;
             try
             {
-                worldFileData = GenerateOneWorld(game, attempted);
+                worldFileData = GenerateOneWorld(game, worldName);
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[BatchGen] Attempt " + attempted + ": generation failed: " + ex.Message);
+                Console.WriteLine("[BatchGen] Attempt " + attempted + " (" + worldName + "): generation failed: " + ex.Message);
                 if (ex is ThreadAbortException) Thread.ResetAbort();
                 continue;
             }
@@ -102,13 +109,15 @@ public static class PyramidBatchGen
             if (hasPyramid)
             {
                 found++;
-                Console.WriteLine("[BatchGen] Attempt " + attempted + ": PYRAMID FOUND (" + sandstoneCount + " bricks) - kept - " + roundSw.Elapsed.TotalSeconds + "s");
+                Console.WriteLine("[BatchGen] Attempt " + attempted + " (" + worldName + "): PYRAMID FOUND (" + sandstoneCount + " bricks) - kept - " + roundSw.Elapsed.TotalSeconds + "s");
                 Console.WriteLine("           " + worldPath);
+                nextN++;
             }
             else
             {
-                Console.WriteLine("[BatchGen] Attempt " + attempted + ": no pyramid - deleting - " + roundSw.Elapsed.TotalSeconds + "s");
+                Console.WriteLine("[BatchGen] Attempt " + attempted + " (" + worldName + "): no pyramid - deleting - " + roundSw.Elapsed.TotalSeconds + "s");
                 DeleteWorldFiles(worldPath);
+                // n is reused on the next attempt since this world was deleted
             }
         }
 
@@ -119,6 +128,25 @@ public static class PyramidBatchGen
         Console.WriteLine("[BatchGen] Attempts: " + attempted);
         Console.WriteLine("[BatchGen] Total time: " + totalSw.Elapsed.TotalSeconds + "s");
         Console.WriteLine("[BatchGen] Avg per world: " + (totalSw.Elapsed.TotalSeconds / attempted) + "s");
+    }
+
+    // Scans worldDir for "<n>_Poc.wld" files and returns max(n) + 1, or 1 if none exist.
+    static int GetNextPocNumber(string worldDir)
+    {
+        int maxN = 0;
+        if (Directory.Exists(worldDir))
+        {
+            foreach (string file in Directory.GetFiles(worldDir, "*_Poc.wld"))
+            {
+                string name = Path.GetFileNameWithoutExtension(file);
+                int idx = name.LastIndexOf("_Poc", StringComparison.Ordinal);
+                if (idx <= 0) continue;
+                int n;
+                if (int.TryParse(name.Substring(0, idx), out n) && n > maxN)
+                    maxN = n;
+            }
+        }
+        return maxN + 1;
     }
 
     const string ToolPlayerName = "BatchGenPlayer";
@@ -176,7 +204,7 @@ public static class PyramidBatchGen
         }
     }
 
-    static object GenerateOneWorld(Assembly game, int attemptNumber)
+    static object GenerateOneWorld(Assembly game, string worldName)
     {
         Type mainType = game.GetType("Terraria.Main");
         Type worldGenType = game.GetType("Terraria.WorldGen");
@@ -190,11 +218,9 @@ public static class PyramidBatchGen
         FieldInfo worldNameField = mainType.GetField("worldName", BindingFlags.Public | BindingFlags.Static);
         FieldInfo activeWorldFileDataField = mainType.GetField("ActiveWorldFileData", BindingFlags.Public | BindingFlags.Static);
         MethodInfo createMetadata = worldFileType.GetMethod("CreateMetadata", BindingFlags.Public | BindingFlags.Static);
-        MethodInfo setSeed = worldFileDataType.GetMethod("SetSeed", new[] { typeof(string) });
+        MethodInfo setSeedToRandom = worldFileDataType.GetMethod("SetSeedToRandom", BindingFlags.Public | BindingFlags.Instance);
         MethodInfo createNewWorld = worldGenType.GetMethod("CreateNewWorld", BindingFlags.Public | BindingFlags.Static);
         FieldInfo worldGenParamEvilField = worldGenType.GetField("WorldGenParam_Evil", BindingFlags.Public | BindingFlags.Static);
-
-        string worldName = "Poc_" + attemptNumber;
 
         setWorldSize.Invoke(null, new object[] { 0 }); // Small
         gameModeProp.SetValue(null, 0, null); // Normal
@@ -204,7 +230,9 @@ public static class PyramidBatchGen
         int gameMode = (int)gameModeProp.GetValue(null, null);
         object metadata = createMetadata.Invoke(null, new object[] { worldName, false, gameMode });
         activeWorldFileDataField.SetValue(null, metadata);
-        setSeed.Invoke(metadata, new object[] { "" });
+        // SetSeed("") is NOT random - it CRC32-hashes the empty string to the same
+        // fixed seed every time. Must call SetSeedToRandom() to actually randomize.
+        setSeedToRandom.Invoke(metadata, null);
 
         object controller = Activator.CreateInstance(controllerType, new object[] { null });
         FieldInfo pausedField = controllerType.GetField("Paused", BindingFlags.Public | BindingFlags.Instance);
